@@ -38,7 +38,7 @@ class MAE(nn.Module):
         self.decoder_pos_emb = nn.Embedding(num_patches, decoder_dim)
         self.to_pixels = nn.Linear(decoder_dim, pixel_values_per_patch)
 
-    def forward(self, img):
+    def forward(self, img, return_outputs=False):
         device = img.device
 
         # get patches
@@ -98,4 +98,10 @@ class MAE(nn.Module):
         # calculate reconstruction loss
 
         recon_loss = F.mse_loss(pred_pixel_values, masked_patches)
-        return recon_loss
+
+        if not return_outputs:
+            # just return the loss
+            return recon_loss
+        else:
+            # otherwise, return additional outputs: pixel values for masked patches, true masked patches, masked_indices
+            return recon_loss, pred_pixel_values, masked_patches, masked_indices
