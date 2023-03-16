@@ -14,7 +14,9 @@ class MAE(nn.Module):
         masking_ratio = 0.75,
         decoder_depth = 1,
         decoder_heads = 8,
-        decoder_dim_head = 64
+        decoder_dim_head = 64,
+        weight_by_pixel=False,
+        nonzero_pixel_threshold=-0.2
     ):
         super().__init__()
         assert masking_ratio > 0 and masking_ratio < 1, 'masking ratio must be kept between 0 and 1'
@@ -37,6 +39,10 @@ class MAE(nn.Module):
         self.decoder = Transformer(dim = decoder_dim, depth = decoder_depth, heads = decoder_heads, dim_head = decoder_dim_head, mlp_dim = decoder_dim * 4)
         self.decoder_pos_emb = nn.Embedding(num_patches, decoder_dim)
         self.to_pixels = nn.Linear(decoder_dim, pixel_values_per_patch)
+
+        # NUTUFTS modifications
+        self.weight_by_pixel = weight_by_pixel
+        self.nonzero_pixel_threshold = nonzero_pixel_threshold
 
     def forward(self, img, return_outputs=False):
         device = img.device
@@ -96,9 +102,35 @@ class MAE(nn.Module):
         pred_pixel_values = self.to_pixels(mask_tokens)
 
         # calculate reconstruction loss
+        if not self.weight_by_pixel:
+            # Original Loss
+            recon_loss = F.mse_loss(pred_pixel_values, masked_patches)
+        else:            
+            # NUTUFTS: modify to weight loss, balancing between zero and non-zero pixels
+            #print("masked_patches: ",masked_patches.shape)
+            with torch.no_grad():
+                nonzero_pixels = (masked_patches>=self.nonzero_pixel_threshold)
+                nonzero_sum = nonzero_pixels.float().sum()
+                
+                zero_pixels    = (masked_patches<self.nonzero_pixel_threshold)
+                zero_sum = zero_pixels.float().sum()
 
-        recon_loss = F.mse_loss(pred_pixel_values, masked_patches)
+                #print("nonzero_sum: ",nonzero_sum)
+                #print("zero_sum: ",zero_sum)
+        
+            all_loss = F.mse_loss(pred_pixel_values, masked_patches, reduction='none')
+            if nonzero_sum>0:
+                nonzero_loss = all_loss[nonzero_pixels].sum()/nonzero_sum.detach()
+            else:
+                nonzero_loss = 0.0
 
+            if zero_sum>0:
+                zero_loss = all_loss[zero_pixels].sum()/zero_sum.detach()
+            else:
+                zero_loss = 0.0
+
+            recon_loss = 0.5*(nonzero_loss+zero_loss)
+            
         if not return_outputs:
             # just return the loss
             return recon_loss
